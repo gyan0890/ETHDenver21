@@ -1,10 +1,3 @@
-
-pragma solidity ^0.5.0;
-
-
-import "https://github.com/OpenZeppelin/openzeppelin-contracts/blob/v2.5.0/contracts/token/ERC721/ERC721.sol";
-
-
 pragma solidity >=0.4.21 <0.6.0;
 
 import "https://github.com/OpenZeppelin/openzeppelin-contracts/blob/v2.5.0/contracts/token/ERC721/ERC721Full.sol";
@@ -35,7 +28,7 @@ contract HRC721 is ERC721Full, ERC721Mintable {
         require(price != 0, "buyToken: price equals 0");
         require(msg.value == price, "buyToken: price doesn't equal salePrice[tokenId]");
 		address payable owner = address(uint160(ownerOf(tokenId)));
-		// approve(address(this), tokenId);
+		approve(address(this), tokenId);
 		salePrice[tokenId] = 0;
 		_transferFrom(owner, msg.sender, tokenId);
         owner.transfer(msg.value);
@@ -186,13 +179,18 @@ contract NFTSale is Ownable, Pausable, Destructible {
     event Received(address indexed payer, uint tokenId, uint256 amount, uint256 balance);
     event Donated(address indexed charity, uint256 amount);
 
+    /**
+    * HRC721 - Harmony contract to create NFTs
+    * currentPrice - Initial Sale price set by the contract owner
+    * charityAddress - Org address chosen by the NFT creator
+    */
     HRC721 public nftAddress;
     uint256 public currentPrice;
     address payable public charityAddress;
 
     /**
     * @dev Contract Constructor
-    * @param _nftAddress address for Crypto Arte non-fungible token contract 
+    * @param _nftAddress address for the Harmongy non-fungible token contract 
     * @param _currentPrice initial sales price
     */
     constructor(address _nftAddress, uint256 _currentPrice,  address payable _charityAddress) public { 
@@ -203,14 +201,20 @@ contract NFTSale is Ownable, Pausable, Destructible {
         charityAddress = _charityAddress;
     }
 
-    function getTokenSellerAddress(uint256 _tokenId) public view returns(address) {
+    /**
+     * @dev check the owner of a Token
+     * @param _tokenId uint256 token representing an Object
+     * Test function to check if the token address can be retrieved.
+     */
+    function getTokenSellerAddress(uint256 _tokenId) internal view returns(address) {
         address tokenSeller = nftAddress.ownerOf(_tokenId);
         return tokenSeller;
-        
     }
+    
     /**
     * @dev Purchase _tokenId
-    * @param _tokenId uint256 token ID (painting number)
+    * @param _tokenId uint256 token ID representing an Object
+    * Sends the extra bid amount to the charity address.
     */
     function purchaseToken(uint256 _tokenId) public payable whenNotPaused {
         require(msg.sender != address(0) && msg.sender != address(this));
@@ -218,26 +222,28 @@ contract NFTSale is Ownable, Pausable, Destructible {
         require(nftAddress.ownerOf(_tokenId) != address(0));
         address tokenSeller = nftAddress.ownerOf(_tokenId);
         nftAddress.safeTransferFrom(tokenSeller, msg.sender, _tokenId);
-        uint256 donation = msg.value - currentPrice;
+        uint256 donation = uint256(msg.value) - currentPrice;
         if(donation > 0){
             sendToCharity(donation, charityAddress);
         }
+        
         emit Received(msg.sender, _tokenId, msg.value, address(this).balance);
     }
 
     //Returning the current price for testing
-    function getCurrentPrice() public view returns(uint256){
-        return currentPrice;
-    }
+    // function getCurrentPrice() public view returns(uint256){
+    //     return currentPrice;
+    // }
 
     /**
     * @dev send / withdraw _amount to _payee
     */
-    function sendTo(address payable _payee, uint256 _amount) public onlyOwner {
-        require(_payee != address(0) && _payee != address(this));
-        require(_amount > 0 && _amount <= address(this).balance);
-        _payee.transfer(_amount);
-        emit Sent(_payee, _amount, address(this).balance);
+    function sendTo(address payable _payee) public payable onlyOwner {
+        require(_payee != address(0) && _payee != address(this), "Payee address cannot be 0 or the contract");
+        require(currentPrice > 0 && currentPrice <= address(this).balance, 
+            "Current price needs to be greater than 0/Funds from this were already withdrawn");
+        _payee.transfer(currentPrice);
+        emit Sent(_payee, currentPrice, address(this).balance);
     }    
 
     /**
@@ -249,6 +255,10 @@ contract NFTSale is Ownable, Pausable, Destructible {
         currentPrice = _currentPrice;
     }  
     
+    /**
+    * @dev sendToCharity Donate amount to the charity
+    * @param _donation: Amount to be donated , _charity: Chosen charity org's address
+    */
     function sendToCharity(uint256 _donation, address payable _charity) public payable {
         require(_charity != address(this));
         require(_donation > 0);
@@ -257,4 +267,3 @@ contract NFTSale is Ownable, Pausable, Destructible {
     }
 
 }
-
