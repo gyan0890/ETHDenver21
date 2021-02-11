@@ -6,12 +6,7 @@ import "https://github.com/OpenZeppelin/openzeppelin-contracts/blob/v2.5.0/contr
 contract HRC721 is ERC721Full, ERC721Mintable {
 	//maps tokenIds to item indexes
 	mapping(uint256 => uint256) private itemIndex;
-	//sales
-	// struct Sale {
-	// 	//tight pack 256bits
-	// 	uint128 price;
-	// 	//end tight pack
-    // }
+	
 	mapping(uint256 => uint256) private salePrice;
 	
 	constructor(string memory _name, string memory _symbol) ERC721Full(_name, _symbol) public {}
@@ -267,3 +262,4 @@ contract NFTSale is Ownable, Pausable, Destructible {
     }
 
 }
+
