@@ -191,6 +191,7 @@ contract NFTSale is Ownable, Pausable, Destructible {
     address payable public charityAddress;
     mapping(uint256 => uint256) private salePrice;
     mapping(uint256 => Token) public tokens;
+    mapping(uint256 => Bidding) tokenBids;
     
 
     /**
@@ -219,7 +220,7 @@ contract NFTSale is Ownable, Pausable, Destructible {
     /**
      * @dev Sell _tokenId for price 
      */
-    function setSale(uint256 _tokenId, uint256 _price) public {
+    function setSale(uint256 _tokenId, uint256 _price, uint _biddingTime) public {
 		require(nftAddress.ownerOf(_tokenId) != address(0), "setSale: nonexistent token");
 		Token memory token;
 		token.id = _tokenId;
@@ -227,6 +228,8 @@ contract NFTSale is Ownable, Pausable, Destructible {
 		token.salePrice = _price;
 		tokens[_tokenId] = token;
 		
+		Bidding placeBids = new Bidding(_tokenId, _biddingTime, _price);
+		tokenBids[_tokenId] = placeBids;
 	} 
 	
     /**
@@ -303,22 +306,28 @@ contract Bidding {
     // Parameters of the auction. Times are either
     // absolute unix timestamps (seconds since 1970-01-01)
     // or time periods in seconds.
-    address public beneficiary;
-    uint public auctionEnd;
 
-    // Current state of the auction.
-    address public highestBidder;
+    uint public auctionEnd;
+    uint public tokenId;
     uint public reservePrice;
-    uint public highestBid;
+    uint bidCounter;
+    address public highestBid;
+
+    struct Bid {
+        address payable bidder;
+        uint bidAmount;
+    }
+   
+       // Set to true at the end, disallows any change
+    bool ended;
     
     // Allowed withdrawals of previous bids
-    mapping(address => uint) pendingReturns;
+    mapping(uint => Bid) bids;
 
-    // Set to true at the end, disallows any change
-    bool ended;
 
-    // Events that will be fired on changes.
-    event HighestBidIncreased(address bidder, uint amount);
+
+    // Events that  will be fired on changes.
+    //event HighestBidIncreased(address bidder, uint amount);
     event AuctionEnded(address winner, uint amount);
 
     // The following is a so-called natspec comment,
@@ -330,11 +339,14 @@ contract Bidding {
     /// seconds bidding time on behalf of the
     /// beneficiary address `_beneficiary`.
     constructor(
+       
+        uint256 _tokenId,
         uint _biddingTime,
-        address _beneficiary
+        uint _reservePrice
     ) public {
-        highestBid = reservePrice;
-        beneficiary = _beneficiary;
+        reservePrice = _reservePrice;
+        tokenId = _tokenId;
+        bidCounter = 0;
         auctionEnd = now + _biddingTime;
     }
 
@@ -359,44 +371,59 @@ contract Bidding {
         // If the bid is not higher, send the
         // money back.
         require(
-            msg.value > highestBid,
-            "The bid value is less than the highest Bid."
+            msg.value > reservePrice,
+            "The bid value is less than the reserve price."
         );
 
-        if (highestBid != 0) {
-            // Sending back the money by simply using
-            // highestBidder.send(highestBid) is a security risk
-            // because it could execute an untrusted contract.
-            // It is always safer to let the recipients
-            // withdraw their money themselves.
-            pendingReturns[highestBidder] += highestBid;
-        }
-        highestBidder = msg.sender;
-        highestBid = msg.value;
-        emit HighestBidIncreased(msg.sender, msg.value);
+       Bid storage newBid = bids[bidCounter+1];
+       newBid.bidder = msg.sender;
+       newBid.bidAmount = msg.value;
+       
+       bidCounter = bidCounter+1;
     }
-
-    /// Withdraw a bid that was overbid.
-    function withdraw() public returns (bool) {
-        uint amount = pendingReturns[msg.sender];
-        if (amount > 0) {
-            // It is important to set this to zero because the recipient
-            // can call this function again as part of the receiving call
-            // before `send` returns.
-            pendingReturns[msg.sender] = 0;
-
-            if (!msg.sender.send(amount)) {
-                // No need to call throw here, just reset the amount owing
-                pendingReturns[msg.sender] = amount;
+    
+    function highestBidder() public view returns(address bidder) {
+        uint highestBidValue;
+        address highestBidAddress;
+        
+        highestBidValue = bids[0].bidAmount;
+        highestBidAddress = address(0);
+        
+        for(uint i = 0; i< bidCounter ; i ++){
+            
+            if(bids[i].bidAmount > highestBidValue) {
+                highestBidValue = bids[i].bidAmount;
+                highestBidAddress = bids[i].bidder;
+            }
+                
+        }
+        
+        return highestBidAddress;
+        
+    }
+    
+    /// Withdraw bids that was overbid.
+    function disperseFunds() public returns (bool) {
+        uint amount = 0;
+        for(uint i = 0; i< bidCounter; i ++){
+            amount = bids[i].bidAmount;
+            
+            if(amount < 0){
                 return false;
             }
+          
+            if(bids[i].bidder != highestBid){
+                
+                bids[i].bidder.transfer(amount);
+            }
+            
         }
         return true;
     }
 
     /// End the auction and send the highest bid
     /// to the beneficiary.
-    function auctionEnd() public {
+    function auctionEnded() public {
         // It is a good guideline to structure functions that interact
         // with other contracts (i.e. they call functions or send Ether)
         // into three phases:
@@ -416,9 +443,14 @@ contract Bidding {
 
         // 2. Effects
         ended = true;
-        emit AuctionEnded(highestBidder, highestBid);
 
-        // 3. Interaction
-        beneficiary.transfer(highestBid);
+        // 3. Get the highest bidder 
+        highestBid = highestBidder();
+        
+        //4. Dispese the rest of the funds back
+        disperseFunds();
+        
+        //Send the highest Bidder and the highest Bid details to the sale smart contract.
+        
     }
 }
