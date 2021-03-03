@@ -173,8 +173,9 @@ contract NFTSale is Ownable, Pausable, Destructible {
     event Sent(address indexed payee, uint256 amount, uint256 balance);
     event Received(address indexed payer, uint tokenId, uint256 amount, uint256 balance);
     event Donated(address indexed charity, uint256 amount);
+    event TokenTransferred(address indexed owner, address indexed receiver, uint256 tokenId);
     
-     struct Token {
+    struct Token {
         uint256 id;
         uint256 salePrice;
         bool active;
@@ -191,6 +192,8 @@ contract NFTSale is Ownable, Pausable, Destructible {
     address payable public charityAddress;
     mapping(uint256 => uint256) private salePrice;
     mapping(uint256 => Token) public tokens;
+    
+    //Holds a mapping between the tokenId and the bidding contract
     mapping(uint256 => Bidding) tokenBids;
     
 
@@ -230,16 +233,21 @@ contract NFTSale is Ownable, Pausable, Destructible {
 		
 		Bidding placeBids = new Bidding(_tokenId, _biddingTime, _price);
 		tokenBids[_tokenId] = placeBids;
+		
 	} 
 	
+	//ONLY FOR TESTING - Actual bids should go to the bidding contract only
+	function bid(uint256 _tokenId) public payable {
+	    tokenBids[_tokenId].bid.value(msg.value)();
+	}
+
     /**
     * @dev Purchase _tokenId
     * @param _tokenId uint256 token ID representing an Object
     * Sends the extra bid amount to the charity address.
     */
-    function purchaseToken(uint256 _tokenId) public payable whenNotPaused {
+    function transferToken(uint256 _tokenId) public whenNotPaused {
         require(msg.sender != address(0) && msg.sender != address(this));
-        require(msg.value >= currentPrice, "Need to bid equal or higher than the reserve price");
         require(nftAddress.ownerOf(_tokenId) != address(0));
         require(tokens[_tokenId].active == true, "Token is not registered for sale!");
         
@@ -250,14 +258,13 @@ contract NFTSale is Ownable, Pausable, Destructible {
         sellingToken.active = false;
         tokens[_tokenId] = sellingToken;
         
+                
         address tokenSeller = nftAddress.ownerOf(_tokenId);
-        nftAddress.safeTransferFrom(tokenSeller, msg.sender, _tokenId);
-        uint256 donation = uint256(msg.value) - currentPrice;
-        if(donation > 0){
-            sendToCharity(donation, charityAddress);
-        }
+        address highestBidder = tokenBids[_tokenId].highestBidder();
+        nftAddress.safeTransferFrom(tokenSeller, highestBidder, _tokenId);
         
-        emit Received(msg.sender, _tokenId, msg.value, address(this).balance);
+        emit TokenTransferred(tokenSeller, highestBidder, _tokenId);
+        
     }
 
     //Returning the current price for testing
@@ -266,15 +273,18 @@ contract NFTSale is Ownable, Pausable, Destructible {
     // }
 
     /**
-    * @dev send / withdraw _amount to _payee
+    * @dev send / withdraw _amount to _payee - Moved to bidding contract
     */
+    /*
+    
     function sendTo(address payable _payee) public payable onlyOwner {
         require(_payee != address(0) && _payee != address(this), "Payee address cannot be 0 or the contract");
         require(currentPrice > 0 && currentPrice <= address(this).balance, 
             "Current price needs to be greater than 0/Funds from this were already withdrawn");
         _payee.transfer(currentPrice);
         emit Sent(_payee, currentPrice, address(this).balance);
-    }    
+    }   
+    */
 
     /**
     * @dev Updates _currentPrice
@@ -285,15 +295,18 @@ contract NFTSale is Ownable, Pausable, Destructible {
         currentPrice = _currentPrice;
     }  
     
-    /**
-    * @dev sendToCharity Donate amount to the charity
-    * @param _donation: Amount to be donated , _charity: Chosen charity org's address
-    */
-    function sendToCharity(uint256 _donation, address payable _charity) public payable {
-        require(_charity != address(this));
-        require(_donation > 0);
-        _charity.transfer(_donation);
-        emit Donated(_charity, _donation);
+   
+    //MOVED to the BIDDING CONTRACT
+    // function sendToCharity(uint256 _donation, address payable _charity) public payable {
+    //     require(_charity != address(this));
+    //     require(_donation > 0);
+    //     _charity.transfer(_donation);
+    //     emit Donated(_charity, _donation);
+    // }
+    
+    //Test functions
+    function getBiddingContractAddress(uint256 _tokenId) public view returns(address){
+        return(address(tokenBids[_tokenId]));
     }
 
 }
@@ -402,7 +415,38 @@ contract Bidding {
         
     }
     
-    /// Withdraw bids that was overbid.
+    function highestBidAmount(address _highestBidder) public view returns(uint _higheseBid)  {
+        
+        for(uint i = 0; i< bidCounter ; i ++){
+            
+            if(bids[i].bidder == _highestBidder) {
+               return bids[i].bidAmount;
+            }
+                
+        }
+        return 0;
+    }
+    
+    //Function to send the money to charity and the bidAmount to the nFT owner
+    function sendMoney(address _highestBidder, address payable _nftOwner, address payable _charity) public {
+        uint bidAmountHighest = highestBidAmount(_highestBidder);
+        uint charityAmount = 0;
+        
+        
+        if(bidAmountHighest != 0){
+            charityAmount = bidAmountHighest - reservePrice;
+        }
+        
+        //Send the excess to the charity address
+        if(charityAmount != 0) {
+            _charity.transfer(charityAmount);
+        }
+        //Send the money to the nftOwner
+        _nftOwner.transfer(reservePrice);
+        
+    }
+    
+    /// Withdraw bids that were not the winners.
     function disperseFunds() public returns (bool) {
         uint amount = 0;
         for(uint i = 0; i< bidCounter; i ++){
@@ -423,7 +467,7 @@ contract Bidding {
 
     /// End the auction and send the highest bid
     /// to the beneficiary.
-    function auctionEnded() public {
+    function auctionEnded(address payable _nftOwner, address payable _charity) public {
         // It is a good guideline to structure functions that interact
         // with other contracts (i.e. they call functions or send Ether)
         // into three phases:
@@ -447,10 +491,11 @@ contract Bidding {
         // 3. Get the highest bidder 
         highestBid = highestBidder();
         
-        //4. Dispese the rest of the funds back
+        
+        //4. Send the money to the owner and the charity
+        sendMoney(highestBid, _nftOwner, _charity);
+        
+        //5. Dispese the rest of the funds back
         disperseFunds();
-        
-        //Send the highest Bidder and the highest Bid details to the sale smart contract.
-        
     }
 }
